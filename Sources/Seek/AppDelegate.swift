@@ -39,6 +39,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         index.rebuild()
 
         registerHotKey()
+
+        if Demo.enabled { Demo.showBackdrop() }
+        for arg in CommandLine.arguments.dropFirst() where arg.hasPrefix("seek://") {
+            if let url = URL(string: arg) { DispatchQueue.main.async { self.handle(url) } }
+        }
+    }
+
+    // MARK: seek:// links
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach(handle)
+    }
+
+    /// seek://search?q=text[&select=N][&actions=1][&preview=1]
+    /// seek://settings[?tab=general|index|passwords]
+    private func handle(_ url: URL) {
+        guard url.scheme == "seek" else { return }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
+        switch url.host {
+        case "search":
+            launcher.present(query: value("q") ?? "",
+                             select: value("select").flatMap(Int.init),
+                             actions: value("actions") == "1",
+                             preview: value("preview") == "1")
+            if Demo.enabled { Demo.report(frame: self.launcher.panelFrame) }
+        case "settings":
+            settings.show(Config.load(), tab: value("tab"))
+            if Demo.enabled, let n = settings.windowNumber { Demo.report(windowNumber: n) }
+        default:
+            break
+        }
     }
 
     /// Opening Seek.app while it's already running (Finder, Spotlight, `open`) shows Settings.

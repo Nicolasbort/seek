@@ -30,6 +30,7 @@ A native macOS launcher, like Spotlight or Alfred, that searches **only apps, fo
 ./build.sh                       # swift build -c release, wraps into build/Seek.app (icon included), signs
 ./build.sh --dmg                 # also build/Seek.dmg (drag-to-Applications installer)
 ./install.sh                     # build, replace /Applications/Seek.app, start it
+Tools/screenshots.sh             # regenerate docs/screenshots from a fake home (needs Screen Recording)
 open build/Seek.app
 build/Seek.app/Contents/MacOS/Seek --bench [queries…]   # headless benchmark vs `mdfind -name`
 ```
@@ -69,6 +70,8 @@ Sources/Seek/
                      Icons come from each pane's .appex (bundle id → path map built once)
   Launcher.swift     the panel controller (modes, keyboard, layout, preview, buffer) + Toast
   Bench.swift        benchmark
+  Demo.swift         `--demo` (README screenshots): gradient backdrop behind the panel, writes panel/window
+                     geometry to $SEEK_DEMO_OUT. Used by Tools/screenshots.sh with CFFIXED_USER_HOME=<fake home>
 ```
 
 ### Threads and queues
@@ -147,6 +150,15 @@ How the scoring works:
 | `settings`, `rebuild index`, `reload settings`, `quit seek` (4+ chars, prefix/word-start match) | `SeekCommand` rows shown above file results |
 | text starting with `/` or `~` | **Browse mode.** Lists that directory, filtered by the last path component; folders sort first on ties. |
 | `pw <site>` (keyword configurable) | Passwords mode (see below). |
+
+### `seek://` links
+
+Registered in Info.plist; handled in `AppDelegate.handle(_:)`. A `seek://` string passed as a launch argument works too.
+
+| Link | Does |
+|---|---|
+| `seek://search?q=text[&select=N][&actions=1][&preview=1]` | Shows the panel with that query; optionally selects row N (1-based), opens Actions, or Quick Look |
+| `seek://settings[?tab=general\|index\|passwords]` | Opens Settings on that tab |
 
 ## UI and behaviour
 

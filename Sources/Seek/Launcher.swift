@@ -171,6 +171,29 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         refresh()
     }
 
+    /// Shows the panel with `query` typed in, then optionally selects a row (1-based), opens
+    /// Actions for it, or opens Quick Look. Used by `seek://search` links.
+    func present(query: String, select: Int? = nil, actions: Bool = false, preview: Bool = false) {
+        show()
+        field.stringValue = query
+        moveCaretToEnd()
+        refresh()
+        guard select != nil || actions || preview else { return }
+        // Results arrive asynchronously from the search queue.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self, self.panel.isVisible else { return }
+            if let n = select, n >= 1, n <= self.rows.count {
+                self.table.selectRowIndexes(IndexSet(integer: n - 1), byExtendingSelection: false)
+                self.table.scrollRowToVisible(n - 1)
+            }
+            if actions, let item = self.selectedRow?.item { self.openActions([item], fromBuffer: false) }
+            if preview, !self.previewOn { self.togglePreview() }
+        }
+    }
+
+    /// The panel's frame, for demo screenshots.
+    var panelFrame: NSRect { panel.frame }
+
     func hide() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
@@ -315,7 +338,8 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
                 self.statusText("Indexing…")
             } else {
                 let suffix = out.indexing ? " · indexing \(Launcher.fmt(out.indexed))…" : ""
-                self.statusText("\(Launcher.fmt(out.total)) results · \(String(format: "%.1f", out.ms)) ms\(suffix)")
+                let total = out.total + commands.count + settings.count
+                self.statusText("\(Launcher.fmt(total)) \(total == 1 ? "result" : "results") · \(String(format: "%.1f", out.ms)) ms\(suffix)")
             }
             rows = Launcher.mergeSettings(settings, into: rows, query: text)
             self.setRows(commands.map(Row.command) + rows)
@@ -363,6 +387,7 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         flashWork?.cancel()
         statusLabel.textColor = .tertiaryLabelColor
         statusLabel.stringValue = s
+        if panel.isVisible { layoutPanel() } // footer widths depend on the status text
     }
 
     /// Shows a short error in the footer.
@@ -370,6 +395,7 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         NSSound.beep()
         statusLabel.textColor = .systemRed
         statusLabel.stringValue = message
+        layoutPanel()
         flashWork?.cancel()
         let w = DispatchWorkItem { [weak self] in self?.statusLabel.textColor = .tertiaryLabelColor; self?.statusLabel.stringValue = "" }
         flashWork = w
@@ -887,8 +913,10 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         hintLabel.isHidden = !expanded
         statusLabel.isHidden = !expanded
         let fy = height - footerH + 7
-        statusLabel.frame = NSRect(x: width - 22 - 280, y: fy, width: 280, height: 16)
-        hintLabel.frame = NSRect(x: 22, y: fy, width: width - 22 - 300, height: 16)
+        // The status text ("N results · X ms") is short; give the key hints whatever is left.
+        let statusW = min(280, ceil(statusLabel.intrinsicContentSize.width) + 4)
+        statusLabel.frame = NSRect(x: width - 22 - statusW, y: fy, width: statusW, height: 16)
+        hintLabel.frame = NSRect(x: 22, y: fy, width: width - 44 - statusW - 16, height: 16)
     }
 
     private func updateFooter() {

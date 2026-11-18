@@ -113,8 +113,11 @@ struct SystemSetting {
         let terms = q.split(separator: " ").map { foldKey(String($0)) }
         var hits: [(SystemSetting, Int32)] = []
         for s in all {
-            let best = ([s.title] + s.keywords).map { Matcher.scoreAll(terms, key: foldKey($0)) }.max() ?? -1
-            if best >= 800 { hits.append((s, best)) }
+            // A keyword hit ("desktop picture" → Wallpaper) ranks below a name hit.
+            let title = Matcher.scoreAll(terms, key: foldKey(s.title))
+            let keyword = s.keywords.map { Matcher.scoreAll(terms, key: foldKey($0)) }.max() ?? -1
+            let best = max(title, keyword >= 0 ? keyword - 150 : -1)
+            if max(title, keyword) >= 800 { hits.append((s, best)) }
         }
         return Array(hits.sorted { $0.1 > $1.1 }.prefix(limit))
     }

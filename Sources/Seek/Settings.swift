@@ -36,6 +36,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
     var onRebuildIndex: (() -> Void)?
 
     private var window: SettingsWindow?
+    private var tabs: NSTabViewController?
     private var config = Config()
     private var saveWork: DispatchWorkItem?
     private var statusTimer: Timer?
@@ -60,9 +61,16 @@ final class SettingsController: NSObject, NSWindowDelegate {
     private let apwPath = NSTextField()
     private let passwordsError = SettingsController.errorLabel()
 
-    func show(_ config: Config) {
+    /// The settings window, for demo screenshots.
+    var windowNumber: Int? { window?.windowNumber }
+
+    func show(_ config: Config, tab: String? = nil) {
         self.config = config
         if window == nil { build() }
+        if let tab, let tabs,
+           let i = tabs.tabViewItems.firstIndex(where: { $0.label.lowercased() == tab.lowercased() }) {
+            tabs.selectedTabViewItemIndex = i
+        }
         fill()
         refreshStatus()
         NSApp.activate(ignoringOtherApps: true)
@@ -99,6 +107,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
             tabs.addTabViewItem(item)
         }
 
+        self.tabs = tabs
         let w = SettingsWindow(contentViewController: tabs)
         w.styleMask = [.titled, .closable]
         w.toolbarStyle = .preference

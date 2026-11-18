@@ -34,5 +34,8 @@ PASS=$(openssl rand -hex 12)
 openssl pkcs12 -export -legacy -inkey key.pem -in cert.pem -name "$NAME" -out seek.p12 -passout "pass:$PASS" 2>/dev/null \
     || openssl pkcs12 -export -inkey key.pem -in cert.pem -name "$NAME" -out seek.p12 -passout "pass:$PASS"
 security import seek.p12 -k "$HOME/Library/Keychains/login.keychain-db" -P "$PASS" -T /usr/bin/codesign
+# Without this, macOS asks "codesign wants to access key…" on every build. Asks for your login password once.
+echo "Allowing codesign to use the key (enter your login password if asked)…"
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s "$HOME/Library/Keychains/login.keychain-db" >/dev/null
 
 security find-identity -p codesigning | grep "\"$NAME\"" && echo "Created “${NAME}”. Now run ./install.sh."
