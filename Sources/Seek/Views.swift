@@ -11,10 +11,24 @@ final class GlassContainer: NSView {
     private var glass: NSView!
     private var applyRadius: (CGFloat) -> Void = { _ in }
 
-    var cornerRadius: CGFloat = 28 { didSet { if oldValue != cornerRadius { applyRadius(cornerRadius) } } }
+    var cornerRadius: CGFloat = 28 {
+        didSet {
+            guard oldValue != cornerRadius else { return }
+            applyRadius(cornerRadius)
+            layer?.cornerRadius = cornerRadius
+            window?.invalidateShadow()
+        }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        // Clip everything (glass included) to the rounded shape so the window's
+        // alpha, and therefore its shadow, follows the corners instead of a square.
+        wantsLayer = true
+        layer?.cornerRadius = cornerRadius
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.backgroundColor = NSColor.clear.cgColor
         #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             let g = NSGlassEffectView()
@@ -42,6 +56,11 @@ final class GlassContainer: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        window?.invalidateShadow()
+    }
 
     private static func mask(radius r: CGFloat) -> NSImage {
         let size = NSSize(width: r * 2 + 1, height: r * 2 + 1)
@@ -72,6 +91,8 @@ struct Row {
         case passwordsApp(String)
         case login(Login, String)   // login, domain as queried
         case terminal(String)       // run a command in Terminal
+        case command(SeekCommand)   // Seek's own commands (Settings, Rebuild Index, Quit)
+        case systemSetting(SystemSetting) // a System Settings pane
         case info
     }
     var title: String
@@ -92,6 +113,7 @@ enum Icons {
         case .item(let i): return icon(for: i)
         case .openWithApp(let url): return cached("app:" + url.path) { NSWorkspace.shared.icon(forFile: url.path) }
         case .passwordsApp: return cached("app:" + PasswordsApp.url.path) { NSWorkspace.shared.icon(forFile: PasswordsApp.url.path) }
+        case .systemSetting(let s): return cached("path:" + s.iconPath) { NSWorkspace.shared.icon(forFile: s.iconPath) }
         default:
             return symbol(row.symbol ?? "circle")
         }

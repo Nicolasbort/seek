@@ -1,0 +1,35 @@
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Build output (build.sh / install.sh)
+build/
+*.dmg
+
+# Xcode (if the package is opened in Xcode)
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# Icon generation scratch
+*.iconset/
+
+# Signing material — never commit keys or certificates
+*.p12
+*.pem
+*.cer
+*.key
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~

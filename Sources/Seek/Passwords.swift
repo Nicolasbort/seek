@@ -6,6 +6,13 @@ enum PasswordsApp {
     static let url = URL(fileURLWithPath: "/System/Applications/Passwords.app")
 
     static func open(searching query: String) {
+        if !query.isEmpty && !ensureAccessibility(prompt: false) {
+            // The system prompt only appears once per app identity, so repeating it is useless.
+            // Say what's wrong and open the list where Seek can be switched on.
+            Toast.shared.show("Seek needs Accessibility access to search Passwords")
+            SystemSetting.all.first { $0.anchor == "Privacy_Accessibility" }?.open()
+            return
+        }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: config) { app, _ in
@@ -21,7 +28,7 @@ enum PasswordsApp {
 
     /// Waits (up to 60 s, so there's time to unlock with Touch ID) for the search field, then types into it.
     private static func typeIntoSearch(pid: pid_t, text: String) {
-        guard ensureAccessibility(prompt: true) else { return }
+        guard ensureAccessibility(prompt: false) else { return }
         let app = AXUIElementCreateApplication(pid)
         let deadline = Date().addingTimeInterval(60)
         while Date() < deadline {
@@ -166,9 +173,22 @@ enum APW {
         let errText = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         p.waitUntilExit()
         killer.cancel()
+        // apw answers {"error": "...", "status": N, "results": [...]} and exits 0 even on errors.
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let status = (obj["status"] as? NSNumber)?.intValue, status != 0 {
+            switch status {
+            case 3: return .success(data)                // no results
+            case 9: return .failure(.needsAuth)          // not running or not paired ("unpaired")
+            default:
+                let msg = (obj["error"] as? String) ?? "apw error \(status)"
+                return .failure(.failed(msg))
+            }
+        }
         if p.terminationStatus == 0 && !data.isEmpty { return .success(data) }
         let msg = (errText + " " + String(decoding: data, as: UTF8.self)).lowercased()
-        if msg.contains("auth") || msg.contains("pin") || msg.contains("session") { return .failure(.needsAuth) }
+        if msg.contains("auth") || msg.contains("pin") || msg.contains("session") || msg.contains("pair") {
+            return .failure(.needsAuth)
+        }
         if msg.contains("daemon") || msg.contains("connect") || msg.contains("refused") || msg.contains("not running") {
             return .failure(.notRunning)
         }

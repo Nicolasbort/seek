@@ -33,6 +33,8 @@ struct PathFilter {
     let roots: [String]
     let excludeNames: Set<String>
     let excludePaths: [String]
+    let excludePatterns: [String]
+    private let excludeRegexes: [NSRegularExpression]
     let includeHidden: Bool
 
     /// Directories that behave like files: shown as one result, never descended into.
@@ -47,13 +49,34 @@ struct PathFilter {
         roots = config.roots.map(PathFilter.normalize)
         excludeNames = Set(config.excludeNames)
         excludePaths = config.excludePaths.map(PathFilter.normalize)
+        excludePatterns = config.excludePatterns
+        excludeRegexes = config.excludePatterns.compactMap(PathFilter.compile)
         includeHidden = config.includeHidden
+    }
+
+    /// Compiles an exclude pattern, expanding a leading "~" / "^~" to the home folder.
+    static func compile(_ pattern: String) -> NSRegularExpression? {
+        var p = pattern
+        let home = NSRegularExpression.escapedPattern(for: NSHomeDirectory())
+        if p.hasPrefix("^~") { p = "^" + home + p.dropFirst(2) }
+        else if p.hasPrefix("~") { p = "^" + home + p.dropFirst(1) }
+        do { return try NSRegularExpression(pattern: p) }
+        catch { NSLog("Seek: ignoring invalid excludePatterns entry \"\(pattern)\": \(error)"); return nil }
+    }
+
+    /// Whether a folder path matches one of the `excludePatterns`.
+    func matchesExcludePattern(_ path: String) -> Bool {
+        guard !excludeRegexes.isEmpty else { return false }
+        let range = NSRange(path.startIndex..., in: path)
+        for r in excludeRegexes where r.firstMatch(in: path, range: range) != nil { return true }
+        return false
     }
 
     /// Identifies the settings an on-disk cache was built with.
     var signature: String {
         "v2|\(roots.joined(separator: ":"))|\(excludeNames.sorted().joined(separator: ":"))|"
-            + "\(excludePaths.joined(separator: ":"))|\(includeHidden)"
+            + "\(excludePaths.joined(separator: ":"))|\(includeHidden)|"
+            + excludePatterns.joined(separator: "\u{1F}")
     }
 
     static func normalize(_ p: String) -> String {
@@ -87,10 +110,18 @@ struct PathFilter {
         }
         guard let root, !PathFilter.isPackage((root as NSString).lastPathComponent) else { return false }
         let comps = path.dropFirst(root.count + 1).split(separator: "/")
+        var dir = root
         for (i, c) in comps.enumerated() {
             let name = String(c)
             if skipName(name) { return false }
-            if i < comps.count - 1 && PathFilter.isPackage(name) { return false } // inside a bundle
+            let isLast = i == comps.count - 1
+            if !isLast && PathFilter.isPackage(name) { return false } // inside a bundle
+            dir += "/" + name
+            if matchesExcludePattern(dir) {
+                if !isLast { return false } // under an excluded folder
+                var isDir: ObjCBool = false     // patterns apply to folders only
+                if FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue { return false }
+            }
         }
         return true
     }
@@ -308,7 +339,8 @@ final class FileIndex {
             }
 
             if isDir {
-                if level > 0 && (filter.excludeNames.contains(name) || filter.isExcludedPath(path)) {
+                if level > 0 && (filter.excludeNames.contains(name) || filter.isExcludedPath(path)
+                                 || filter.matchesExcludePattern(path)) {
                     fts_set(fts, ent, FTS_SKIP)
                     continue
                 }

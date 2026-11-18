@@ -25,6 +25,7 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
     private let knowledge: Knowledge
     var config: Config
     var onOpened: ((Item, String) -> Void)?
+    var onCommand: ((SeekCommand) -> Void)?
 
     private let panel: KeyPanel
     private let container = GlassContainer(frame: .zero)
@@ -296,7 +297,9 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         engine.search(req) { [weak self] out in
             guard let self, self.field.stringValue == text, Launcher.sameKind(self.mode, started) else { return }
             var rows = out.items.map(Row.item)
-            if rows.isEmpty {
+            let commands = foldersOnly ? [] : SeekCommand.matching(text)
+            let settings = foldersOnly ? [] : SystemSetting.matching(text)
+            if rows.isEmpty && commands.isEmpty && settings.isEmpty {
                 if out.contentSearch {
                     rows = [Row(title: "No files contain that", subtitle: "Spotlight content search", payload: .info, symbol: "doc.text.magnifyingglass")]
                 } else if !out.indexing {
@@ -314,7 +317,8 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
                 let suffix = out.indexing ? " · indexing \(Launcher.fmt(out.indexed))…" : ""
                 self.statusText("\(Launcher.fmt(out.total)) results · \(String(format: "%.1f", out.ms)) ms\(suffix)")
             }
-            self.setRows(rows)
+            rows = Launcher.mergeSettings(settings, into: rows, query: text)
+            self.setRows(commands.map(Row.command) + rows)
         }
     }
 
@@ -322,6 +326,28 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         let items = knowledge.recents(limit: config.visibleRows).compactMap(Item.make)
         statusText(items.isEmpty ? "" : "Recent")
         setRows(items.map(Row.item))
+    }
+
+    /// Places System Settings matches among file results as if they were apps: each goes above
+    /// the first result it outscores (looking at the top few only), otherwise after them.
+    static func mergeSettings(_ settings: [(SystemSetting, Int32)], into rows: [Row], query: String) -> [Row] {
+        guard !settings.isEmpty else { return rows }
+        let terms = query.trimmingCharacters(in: .whitespaces).split(separator: " ").map { foldKey(String($0)) }
+        func itemScore(_ r: Row) -> Int32 {
+            guard let i = r.item else { return .max }
+            let s = Matcher.scoreAll(terms, key: foldKey(i.name))
+            if s < 0 { return .max } // learned or content hits we can't compare: keep them on top
+            return s + (i.kind == .app ? 120 : i.kind == .folder ? 25 : 0) - Int32(i.name.utf8.count)
+        }
+        var out = rows
+        let window = 6
+        for (setting, score) in settings.reversed() {
+            let own = score + 120 - Int32(setting.title.utf8.count)
+            let limit = min(out.count, window)
+            let at = (0..<limit).first { itemScore(out[$0]) < own } ?? limit
+            out.insert(.systemSetting(setting), at: at)
+        }
+        return out
     }
 
     private static func sameKind(_ a: Mode, _ b: Mode) -> Bool {
@@ -463,6 +489,8 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
             case .passwordsApp(let q): hide(); PasswordsApp.open(searching: q)
             case .login(let login, let domain): copyLogin(login, domain: domain, mods)
             case .terminal(let cmd): hide(); APW.runInTerminal(cmd)
+            case .command(let c): hide(); onCommand?(c)
+            case .systemSetting(let s): hide(); s.open()
             default: break
             }
 
@@ -722,6 +750,10 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
             buffer.removeAll()
             updateBuffer()
             return true
+        case 43 where mods == .command: // ⌘, opens Settings
+            hide()
+            onCommand?(.settings)
+            return true
         case 16 where mods == .command: // ⌘Y
             togglePreview()
             return true
@@ -826,6 +858,8 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         f.origin = NSPoint(x: (midX - width / 2).rounded(), y: top - height)
         if f != panel.frame { panel.setFrame(f, display: true) }
         container.cornerRadius = expanded ? 26 : barH / 2
+        container.displayIfNeeded()
+        panel.invalidateShadow()
 
         let cy = barH / 2
         var x: CGFloat = 22
@@ -868,6 +902,8 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
             case .login?: hint = "↩ Copy Password   ⌘↩ Copy Username   ⌥↩ Copy 2FA Code"
             case .passwordsApp?: hint = "↩ Open in Passwords"
             case .terminal?: hint = "↩ Run in Terminal"
+            case .command?: hint = "↩ Run   ⌘, Settings"
+            case .systemSetting?: hint = "↩ Open in System Settings"
             default: break
             }
             if !buffer.isEmpty { hint += "   ⌥→ Act on \(buffer.count) buffered" }
@@ -910,6 +946,8 @@ final class Toast {
         let vf = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
         p.setFrame(NSRect(x: vf.midX - w / 2, y: vf.minY + 90, width: w, height: h), display: true)
         container.cornerRadius = h / 2
+        container.displayIfNeeded()
+        p.invalidateShadow()
         label.frame = NSRect(x: 20, y: (h - size.height) / 2, width: ceil(size.width) + 2, height: size.height)
         p.alphaValue = 1
         p.orderFrontRegardless()
@@ -920,5 +958,68 @@ final class Toast {
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
+    }
+}
+
+/// Seek's own commands, offered as results when the query matches them ("settings", "quit", …).
+/// Seek has no menu bar item; these are how you reach it besides ⌘, (Settings).
+enum SeekCommand: CaseIterable {
+    case settings, rebuildIndex, reloadSettings, quit
+
+    var title: String {
+        switch self {
+        case .settings: return "Seek Settings"
+        case .rebuildIndex: return "Rebuild Seek Index"
+        case .reloadSettings: return "Reload Seek Settings"
+        case .quit: return "Quit Seek"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .settings: return "Hotkey, folders, skip lists · ⌘,"
+        case .rebuildIndex: return "Re-scan every folder from scratch"
+        case .reloadSettings: return "Re-read ~/.config/seek/config.json"
+        case .quit: return "Stop Seek until you open it again"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .settings: return "gearshape"
+        case .rebuildIndex: return "arrow.clockwise"
+        case .reloadSettings: return "doc.badge.gearshape"
+        case .quit: return "power"
+        }
+    }
+
+    /// Names the command answers to, besides its title.
+    private var keywords: [String] {
+        switch self {
+        case .settings: return ["settings", "preferences", "seek settings"]
+        case .rebuildIndex: return ["rebuild index", "reindex", "seek rebuild"]
+        case .reloadSettings: return ["reload settings", "seek reload"]
+        case .quit: return ["quit seek", "exit seek"]
+        }
+    }
+
+    /// Commands whose name starts with (or has a word starting with) the query. Needs 4+ characters
+    /// so short searches ("con", "pre") aren't crowded by commands.
+    static func matching(_ text: String) -> [SeekCommand] {
+        let q = text.trimmingCharacters(in: .whitespaces)
+        guard q.count >= 4, let first = q.first, !"/~.".contains(first), !q.contains(":") else { return [] }
+        let terms = q.split(separator: " ").map { foldKey(String($0)) }
+        var hits: [(SeekCommand, Int32)] = []
+        for c in allCases {
+            let best = ([c.title] + c.keywords).map { Matcher.scoreAll(terms, key: foldKey($0)) }.max() ?? -1
+            if best >= 800 { hits.append((c, best)) }
+        }
+        return hits.sorted { $0.1 > $1.1 }.map(\.0)
+    }
+}
+
+extension Row {
+    static func command(_ c: SeekCommand) -> Row {
+        Row(title: c.title, subtitle: c.subtitle, payload: .command(c), symbol: c.symbol)
     }
 }

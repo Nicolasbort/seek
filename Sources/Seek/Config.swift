@@ -11,6 +11,10 @@ struct Config: Codable {
                         "bower_components"]
     /// Full paths skipped (with everything under them).
     var excludePaths = ["~/Library", "~/.Trash"]
+    /// Regular expressions matched against a folder's full path; a match skips the folder and
+    /// everything under it. A leading "~" (or "^~") means your home folder.
+    /// Example: "~/Developer/.*/deps$", "/build/(intermediates|tmp)$".
+    var excludePatterns: [String] = []
     /// Index files and folders whose names start with ".".
     var includeHidden = false
     /// Result rows shown before the list scrolls.
@@ -29,6 +33,7 @@ struct Config: Codable {
         roots = try c.decodeIfPresent([String].self, forKey: .roots) ?? d.roots
         excludeNames = try c.decodeIfPresent([String].self, forKey: .excludeNames) ?? d.excludeNames
         excludePaths = try c.decodeIfPresent([String].self, forKey: .excludePaths) ?? d.excludePaths
+        excludePatterns = try c.decodeIfPresent([String].self, forKey: .excludePatterns) ?? d.excludePatterns
         includeHidden = try c.decodeIfPresent(Bool.self, forKey: .includeHidden) ?? d.includeHidden
         visibleRows = max(1, try c.decodeIfPresent(Int.self, forKey: .visibleRows) ?? d.visibleRows)
         passwordsKeyword = try c.decodeIfPresent(String.self, forKey: .passwordsKeyword) ?? d.passwordsKeyword
@@ -45,11 +50,15 @@ struct Config: Codable {
             return Config()
         }
         let config = Config()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? config.save()
+        return config
+    }
+
+    func save() throws {
+        try FileManager.default.createDirectory(at: Config.directory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try? encoder.encode(config).write(to: url, options: .atomic)
-        return config
+        try encoder.encode(self).write(to: Config.url, options: .atomic)
     }
 }
 

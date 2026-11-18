@@ -1,6 +1,7 @@
 import AppKit
-import ServiceManagement
 
+/// No menu bar item: Seek is reached through its hotkey. Settings open with ⌘, in the panel,
+/// by typing "settings", or by opening Seek.app again while it's running.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var config = Config.load()
     private let knowledge = Knowledge()
@@ -8,8 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var index: FileIndex!
     private var launcher: Launcher!
     private var hotKey: HotKey?
-    private var statusItem: NSStatusItem!
-    private var loginItem: NSMenuItem!
+    private let settings = SettingsController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         engine.includeHidden = config.includeHidden
@@ -29,10 +29,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let count = self.knowledge.recordOpen(item.path, query: query)
             self.index.setUsage(item.path, count: count)
         }
+        launcher.onCommand = { [weak self] in self?.run($0) }
+        settings.onSave = { [weak self] config in self?.apply(config) }
+        settings.onRebuildIndex = { [weak self] in self?.run(.rebuildIndex) }
+        // Pause the global shortcut while recording a new one, or pressing it would toggle the panel.
+        settings.onRecordingHotKey = { [weak self] recording in
+            if recording { self?.hotKey = nil } else { self?.registerHotKey() }
+        }
         index.rebuild()
 
         registerHotKey()
-        buildStatusItem()
+    }
+
+    /// Opening Seek.app while it's already running (Finder, Spotlight, `open`) shows Settings.
+    /// This is the way back in if the hotkey ever stops working.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSettings()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -45,83 +58,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func registerHotKey() {
         hotKey = nil
         guard let (code, mods) = HotKey.parse(config.hotkey) else {
-            alert("Seek couldn't understand the hotkey “\(config.hotkey)”.",
-                  info: "Use something like \"cmd+shift+space\" or \"option+space\" in \(Config.url.path).")
+            hotKeyProblem("Seek couldn’t understand the hotkey “\(config.hotkey)”.",
+                          info: "Use something like “cmd+shift+space” or “option+space”.")
             return
         }
         hotKey = HotKey(keyCode: code, modifiers: mods) { [weak self] in self?.launcher.toggle() }
         if hotKey == nil {
-            alert("The shortcut \(config.hotkey) is already taken.",
-                  info: "Another app (Alfred?) is using it. Change Alfred's hotkey, or set \"hotkey\" in \(Config.url.path) and choose Reload Settings.")
+            hotKeyProblem("The shortcut \(config.hotkey) is already taken.",
+                          info: "Another app (Alfred?) is using it. Change that app’s hotkey, or pick another one for Seek.")
         }
     }
 
-    // MARK: Menu bar
-
-    private func buildStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Seek")
-
-        let menu = NSMenu()
-        menu.addItem(item("Open Seek", #selector(openLauncher)))
-        menu.addItem(.separator())
-        menu.addItem(item("Rebuild Index", #selector(rebuildIndex)))
-        menu.addItem(item("Edit Settings…", #selector(editSettings)))
-        menu.addItem(item("Reload Settings", #selector(reloadSettings)))
-        menu.addItem(item("Allow Passwords Integration…", #selector(requestAccessibility)))
-        loginItem = item("Launch at Login", #selector(toggleLogin))
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(loginItem)
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Seek", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        statusItem.menu = menu
-    }
-
-    private func item(_ title: String, _ action: Selector) -> NSMenuItem {
-        let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        i.target = self
-        return i
-    }
-
-    @objc private func openLauncher() { launcher.show() }
-
-    @objc private func rebuildIndex() { index.rebuild(useCache: false) }
-
-    @objc private func editSettings() {
-        _ = Config.load() // makes sure the file exists
-        let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
-        NSWorkspace.shared.open([Config.url], withApplicationAt: textEdit, configuration: NSWorkspace.OpenConfiguration())
-    }
-
-    @objc private func reloadSettings() {
-        config = Config.load()
-        engine.includeHidden = config.includeHidden
-        launcher.config = config
-        registerHotKey()
-        index.rebuild(config: config)
-    }
-
-    @objc private func requestAccessibility() {
-        if PasswordsApp.ensureAccessibility(prompt: true) {
-            alert("Passwords integration is ready.", info: "Type “\(config.passwordsKeyword) github” in Seek.")
-        }
-    }
-
-    @objc private func toggleLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
-            else { try SMAppService.mainApp.register() }
-        } catch {
-            alert("Couldn't change the login item.", info: error.localizedDescription)
-        }
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-    }
-
-    private func alert(_ title: String, info: String) {
+    private func hotKeyProblem(_ title: String, info: String) {
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
         a.messageText = title
-        a.informativeText = info
-        a.runModal()
+        a.informativeText = info + "\n\nYou can always reach Settings by opening Seek.app again."
+        a.addButton(withTitle: "Open Settings")
+        a.addButton(withTitle: "Later")
+        if a.runModal() == .alertFirstButtonReturn { openSettings() }
+    }
+
+    // MARK: Commands
+
+    private func run(_ command: SeekCommand) {
+        switch command {
+        case .settings: openSettings()
+        case .rebuildIndex: index.rebuild(useCache: false); Toast.shared.show("Rebuilding index…")
+        case .reloadSettings: apply(Config.load()); Toast.shared.show("Settings reloaded")
+        case .quit: NSApp.terminate(nil)
+        }
+    }
+
+    private func openSettings() { settings.show(Config.load()) }
+
+    private func apply(_ newConfig: Config) {
+        let reindex = PathFilter(config: newConfig).signature != PathFilter(config: config).signature
+        let newHotKey = newConfig.hotkey != config.hotkey || hotKey == nil
+        config = newConfig
+        engine.includeHidden = config.includeHidden
+        launcher.config = config
+        if newHotKey { registerHotKey() }
+        if reindex { index.rebuild(config: config) }
     }
 }
