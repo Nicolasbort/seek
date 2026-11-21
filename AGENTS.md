@@ -133,6 +133,7 @@ How the scoring works:
 - **Non-ASCII terms only match as substrings**, so a multibyte UTF-8 character never gets split.
 - **Multiple terms** (split on spaces) must all match, and the scores are averaged.
 - **Final score** = term average + kind boost (app +120, folder +25) + usage boost (min(count, 20) × 12) − key length − depth × 3.
+- **Apps first (Alfred-style):** after ranking, `Launcher.appsFirst` moves apps whose name matches at prefix/word-start level (score ≥ 800) above everything else — commands, System Settings panes, learned picks and files — keeping their order. Loose fuzzy app matches stay in place. Not applied in browse mode or `in:` searches. App rows are drawn with a 36 pt icon, a semibold 15 pt title (vertically centred) and an “App” tag, and no location subtitle (⌥↩ still copies the path).
 - **The parallel scan** uses `DispatchQueue.concurrentPerform`, one chunk when there are fewer than 16k candidates, otherwise cores × 3 chunks. It keeps a TopK per chunk and merges them.
 - **Incremental narrowing:** if the new term bytes start with the previous ones, the filter signature is unchanged and the snapshot generation matches, only the previous match set is rescanned.
 - **Learned results:** `Knowledge.learned(for:)` returns up to 3 paths the user picked before for this exact query, or for longer queries that start with it. These are injected at the top if they still exist and still match. Doing this outside the index avoids needing a path→index lookup across queues.
@@ -193,7 +194,7 @@ A chip to the left of the field names the current mode. Esc or ← (with an empt
 | Key | Action |
 |---|---|
 | ↩ | Open (or run the selected row) |
-| ⌘↩ | Reveal in Finder |
+| ⌘↩ | Reveal in Finder. In browse mode on a folder: step into it (same as ⇥) |
 | ⌥↩ | Copy the path |
 | ↑ ↓, ⌃P ⌃N | Move the selection |
 | ⌘1–⌘9 | Activate that row (absolute numbering) |
@@ -205,6 +206,7 @@ A chip to the left of the field names the current mode. Esc or ← (with an empt
 | ⌥← | Remove the last buffered item |
 | ⌥⌫ | Clear the buffer |
 | ⌘, | Settings |
+| ⌘A ⌘C ⌘V ⌘X ⌘Z ⇧⌘Z | Text editing in the field (Seek has no Edit menu, so these are handled in the monitor) |
 | Esc | Back, close the preview, or hide |
 | Click | Activate. Dragging a row drags its file URL out. |
 

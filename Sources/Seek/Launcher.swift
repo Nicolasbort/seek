@@ -342,7 +342,11 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
                 self.statusText("\(Launcher.fmt(total)) \(total == 1 ? "result" : "results") · \(String(format: "%.1f", out.ms)) ms\(suffix)")
             }
             rows = Launcher.mergeSettings(settings, into: rows, query: text)
-            self.setRows(commands.map(Row.command) + rows)
+            var all = commands.map(Row.command) + rows
+            if out.browsingDirectory == nil && !out.contentSearch {
+                all = Launcher.appsFirst(all, query: text)
+            }
+            self.setRows(all)
         }
     }
 
@@ -354,6 +358,22 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
 
     /// Places System Settings matches among file results as if they were apps: each goes above
     /// the first result it outscores (looking at the top few only), otherwise after them.
+    /// Moves apps whose name clearly matches (prefix or word start, like Alfred) above everything
+    /// else, keeping their relative order. Loose fuzzy app matches stay where ranking put them.
+    static func appsFirst(_ rows: [Row], query: String) -> [Row] {
+        let terms = query.trimmingCharacters(in: .whitespaces).split(separator: " ").map { foldKey(String($0)) }
+        guard !terms.isEmpty else { return rows }
+        var apps: [Row] = [], rest: [Row] = []
+        for r in rows {
+            if let i = r.item, i.kind == .app, Matcher.scoreAll(terms, key: foldKey(i.name)) >= 800 {
+                apps.append(r)
+            } else {
+                rest.append(r)
+            }
+        }
+        return apps + rest
+    }
+
     static func mergeSettings(_ settings: [(SystemSetting, Int32)], into rows: [Row], query: String) -> [Row] {
         guard !settings.isEmpty else { return rows }
         let terms = query.trimmingCharacters(in: .whitespaces).split(separator: " ").map { foldKey(String($0)) }
@@ -511,6 +531,8 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         case .search:
             guard let row else { return }
             switch row.payload {
+            case .item(let item) where mods == .command && item.kind == .folder && isBrowsing:
+                tabComplete() // ⌘↩ in browse mode steps into the folder, like ⇥
             case .item(let item): open(item, mods)
             case .passwordsApp(let q): hide(); PasswordsApp.open(searching: q)
             case .login(let login, let domain): copyLogin(login, domain: domain, mods)
@@ -780,6 +802,13 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
             hide()
             onCommand?(.settings)
             return true
+        // Seek has no Edit menu, so the usual text shortcuts are handled here.
+        case 0 where mods == .command: field.currentEditor()?.selectAll(nil); return true // ⌘A
+        case 8 where mods == .command: field.currentEditor()?.copy(nil); return true      // ⌘C
+        case 9 where mods == .command: field.currentEditor()?.paste(nil); return true     // ⌘V
+        case 7 where mods == .command: field.currentEditor()?.cut(nil); return true       // ⌘X
+        case 6 where mods == .command: field.currentEditor()?.undoManager?.undo(); return true // ⌘Z
+        case 6 where mods == [.command, .shift]: field.currentEditor()?.undoManager?.redo(); return true
         case 16 where mods == .command: // ⌘Y
             togglePreview()
             return true
@@ -801,6 +830,12 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         let i = max(0, min(rows.count - 1, table.selectedRow + delta))
         table.selectRowIndexes(IndexSet(integer: i), byExtendingSelection: false)
         table.scrollRowToVisible(i)
+    }
+
+    /// The query is a path (browse mode).
+    private var isBrowsing: Bool {
+        let t = field.stringValue.trimmingCharacters(in: .whitespaces)
+        return t.hasPrefix("~") || t.hasPrefix("/")
     }
 
     private func tabComplete() {
@@ -924,6 +959,8 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTa
         switch mode {
         case .search:
             switch selectedRow?.payload {
+            case .item(let i)? where i.kind == .folder && isBrowsing:
+                hint = "↩ Open   ⌘↩ or ⇥ Browse In   ⌥↩ Copy Path   → Actions   ⇧ Preview"
             case .item(let i)?:
                 hint = "↩ Open   ⌘↩ Reveal   ⌥↩ Copy Path   → Actions"
                     + (i.kind == .file && !PathFilter.isPackage(i.path) ? "" : "   ⇥ Browse") + "   ⇧ Preview"

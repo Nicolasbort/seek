@@ -100,7 +100,8 @@ struct Row {
     var payload: Payload
     var symbol: String? = nil
 
-    static func item(_ i: Item) -> Row { Row(title: i.name, subtitle: i.location, payload: .item(i)) }
+    /// Apps show just their name (⌥↩ still copies the path); everything else shows its location.
+    static func item(_ i: Item) -> Row { Row(title: i.name, subtitle: i.kind == .app ? "" : i.location, payload: .item(i)) }
 
     var item: Item? { if case .item(let i) = payload { return i }; return nil }
 }
@@ -164,10 +165,22 @@ final class ResultCell: NSTableCellView {
     let title = NSTextField(labelWithString: "")
     let subtitle = NSTextField(labelWithString: "")
     let badge = NSTextField(labelWithString: "")
+    /// "App" tag shown on application rows, Alfred-style.
+    private let appTag = TagLabel(text: "App")
+    private let trailing = NSStackView()
+    private var titleAboveCenter: NSLayoutConstraint!
+    private var titleCentered: NSLayoutConstraint!
+    private var iconWidth: NSLayoutConstraint!
+    private var iconHeight: NSLayoutConstraint!
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        for v in [icon, title, subtitle, badge] as [NSView] {
+        trailing.orientation = .horizontal
+        trailing.spacing = 10
+        trailing.addArrangedSubview(appTag)
+        trailing.addArrangedSubview(badge)
+        trailing.setHuggingPriority(.required, for: .horizontal)
+        for v in [icon, title, subtitle, trailing] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -186,19 +199,23 @@ final class ResultCell: NSTableCellView {
         badge.setContentHuggingPriority(.required, for: .horizontal)
         badge.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        titleAboveCenter = title.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 1)
+        titleCentered = title.centerYAnchor.constraint(equalTo: centerYAnchor)
+        iconWidth = icon.widthAnchor.constraint(equalToConstant: 30)
+        iconHeight = icon.heightAnchor.constraint(equalToConstant: 30)
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            // Icons are centred in a fixed 36 pt slot so titles line up whatever the icon size.
+            icon.centerXAnchor.constraint(equalTo: leadingAnchor, constant: 18 + 18),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 30),
-            icon.heightAnchor.constraint(equalToConstant: 30),
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -10),
-            title.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 1),
+            iconWidth, iconHeight,
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18 + 36 + 10),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -10),
+            titleAboveCenter,
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -10),
+            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -10),
             subtitle.topAnchor.constraint(equalTo: centerYAnchor, constant: 2),
-            badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
-            badge.centerYAnchor.constraint(equalTo: centerYAnchor),
+            trailing.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            trailing.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
@@ -209,8 +226,48 @@ final class ResultCell: NSTableCellView {
         title.stringValue = row.title
         subtitle.stringValue = row.subtitle
         subtitle.isHidden = row.subtitle.isEmpty
+        // One-line rows (apps, actions) centre the title; two-line rows sit it above the middle.
+        titleAboveCenter.isActive = !subtitle.isHidden
+        titleCentered.isActive = subtitle.isHidden
         badge.stringValue = text
+
+        let isApp = row.item?.kind == .app
+        iconWidth.constant = isApp ? 36 : 30
+        iconHeight.constant = isApp ? 36 : 30
+        title.font = .systemFont(ofSize: isApp ? 15 : 14, weight: isApp ? .semibold : .medium)
+        appTag.isHidden = !isApp
     }
+}
+
+/// A small rounded tag, e.g. "App".
+final class TagLabel: NSView {
+    private let label: NSTextField
+
+    init(text: String) {
+        label = NSTextField(labelWithString: text)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.cornerCurve = .continuous
+        label.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        label.textColor = .controlAccentColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+        ])
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
+    }
+    override var wantsUpdateLayer: Bool { true }
 }
 
 /// Small rounded label used for the mode chip ("Move To…", "Actions").

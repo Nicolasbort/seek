@@ -64,7 +64,7 @@ Tools/make-signing-cert.sh  # adds a self-signed "Seek Dev" certificate to your 
 | ↩ / ⌘↩ / ⌥↩ | Open / Reveal in Finder / Copy path |
 | ⌘1 … ⌘9 | Open that row |
 | → | Actions for the selection (type to filter) |
-| ⇥ | Browse into the selected folder (or type `~/` or `/` to browse from there) |
+| ⇥ | Browse into the selected folder (or type `~/` or `/` to browse from there; ⌘↩ steps into folders there too) |
 | ⇧ (tap) or ⌘Y | Quick Look preview |
 | ⌥↑ / ⌥↓ | Add the selection to the **file buffer** |
 | ⌥→ | Act on everything in the buffer · ⌥← remove last · ⌥⌫ clear |
